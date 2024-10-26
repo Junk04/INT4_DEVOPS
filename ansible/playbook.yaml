@@ -1,0 +1,176 @@
+- name: Configuring Debian 11
+  hosts: debian
+  become: yes
+
+  tasks:
+    - name: Update Packages
+      apt:
+        update_cache: yes
+
+    - name: Installing useful utilities
+      apt:
+        name:
+          - htop
+          - git
+          - curl
+          - wget
+          - ca-certificates
+          - gnupg
+        state: present
+        update_cache: yes
+
+    - name: Change the SSH port
+      lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: '^#?Port'
+        line: "Port 2284"
+
+    - name: Disable root login in SSH
+      lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: '^#?PermitRootLogin'
+        line: "PermitRootLogin no"
+
+    - name: Restart SSH
+      service:
+        name: ssh
+        state: restarted
+
+
+    - name: Install Fail2ban
+      apt:
+        name: fail2ban
+        update_cache: yes
+
+    - name: Configuring fail2ban
+      copy:
+        dest: /etc/fail2ban/jail.local
+        content: |
+          [sshd]
+          enabled = true
+          port = ssh
+          filter = sshd
+          logpath = /var/log/auth.log
+          maxretry = 3
+          bantime = 3600
+          ignoreip = 127.0.0.1
+        owner: root
+        group: root
+        mode: '0744'
+
+    - name: Restart Fail2ban
+      systemd:
+        name: fail2ban
+        state: restarted
+        enabled: true
+
+    - name: Install iptables
+      apt:
+        name: iptables
+        state: present
+
+    - name: Allow incoming connections on port 2284 for SSH
+      iptables:
+        chain: INPUT
+        protocol: tcp
+        destination_port: 2284
+        jump: ACCEPT
+
+    - name: Allow incoming connections on port 5432 for PostgreSQL
+      iptables:
+        chain: INPUT
+        protocol: tcp
+        destination_port: 5432
+        jump: ACCEPT
+
+    - name: Allow established connections
+      iptables:
+        chain: INPUT
+        jump: ACCEPT
+        match: state
+        ctstate: ESTABLISHED
+
+    - name: Disable all other incoming connections
+      iptables:
+        chain: INPUT
+        jump: DROP
+
+    - name: Save iptables rules
+      command: /sbin/iptables-save
+      register: iptables_rules
+
+- name: Configuring PostgreSQL-16
+  hosts: debian
+  become: yes
+
+  tasks:
+    - name: Create directory for PostgreSQL key
+      file:
+        path: /usr/share/postgresql-common/pgdg
+        state: directory
+        mode: '0755'
+
+    - name: Download PostgreSQL GPG key
+      get_url:
+        url: https://www.postgresql.org/media/keys/ACCC4CF8.asc
+        dest: /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc
+        mode: '0644'
+
+    - name: Add PostgreSQL repository
+      shell: echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list
+
+    - name: Update package lists
+      apt:
+        update_cache: yes
+
+
+    - name: Installing PostgreSQL 16
+      apt:
+        name: postgresql-16
+        state: present
+        update_cache: yes
+
+    - name: Ensure PostgreSQL is started and enabled at boot
+      service:
+        name: postgresql
+        state: started
+        enabled: yes
+
+    - name: Ensure psycopg2 package is installed
+      apt:
+        name: python3-psycopg2
+        state: present
+
+#    - name: Set password for postgres user
+#      postgresql_user:
+#        name: postgres
+#        password: "postgres"
+#        role_attr_flags: 'SUPERUSER'
+#        login_host: 'localhost'
+#      become_user: postgres
+
+    - name: Configure postgresql.conf
+      become_user: postgres
+      blockinfile:
+        path: /etc/postgresql/16/main/postgresql.conf
+        block: |
+          listen_addresses = '*'
+          shared_buffers = 512MB # 25% of the total RAM on the server. There are 2GB on my server
+          work_mem = 32MB
+          maintenance_work_mem = 320MB
+          temp_buffers = 8MB
+          effective_cache_size = 1GB
+
+          checkpoint_timeout = 15 min
+          checkpoint_completion_target = 0.9
+          max_wal_size = 1024MB
+          min_wal_size = 512 MB
+
+          logging_collector = on
+          log_directory = 'pg_log'
+          log_filename = 'postgresql-%a.log'
+
+    - name: Restart PostgreSQL
+      service:
+        name: postgresql
+        state: restarted
