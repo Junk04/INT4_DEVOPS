@@ -1,4 +1,4 @@
-from flask import Flask
+from flask import Flask, render_template_string
 
 app = Flask(__name__)
 
@@ -11,7 +11,7 @@ index_html = """
     <title>Flask Health Check</title>
 </head>
 <body>
-    <h1>Welcome to the Flask Health Check App!</h1>
+    <h1>Welcome to the Flask App!</h1>
     <p>Перейдите на <a href="/healthz">/healthz</a> для проверки состояния.</p>
 </body>
 </html>
